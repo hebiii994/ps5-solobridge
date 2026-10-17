@@ -57,7 +57,9 @@ packet.
 **Latency.** The kernel FIFO of the endpoint accepts ~800 packets (100 ms). solobridge
 keeps it almost empty (~6 ms ahead), estimating consumption from the clock. The ring
 buffer is regulated on its minimum level (just before each 1024-frame capture record),
-dropping or repeating at most one frame per millisecond to absorb clock drift.
+dropping or repeating at most one frame every 8 ms (0.26%, no audible pitch change) to
+absorb clock drift. A large excess, like the backlog the capture service hands over
+when a session starts, is skipped at once instead of being played back faster.
 
 ## Repository layout
 

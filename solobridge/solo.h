@@ -15,6 +15,7 @@ typedef struct {
   int channels, subslot, bits;
   uint8_t ep;
   uint16_t maxpkt;
+  uint32_t rate;      // sample rate riletto dalla Solo dopo l'impostazione
 } solo_t;
 
 // Cerca la Solo, legge i descrittori, attiva lo streaming a SOLO_RATE.

@@ -41,7 +41,12 @@
 #define MARGIN_HIGH    480
 #define PREBUFFER      (REC_FRAMES + MARGIN_TARGET)
 #define WINDOW_PKTS    4000                // finestra di misura: 0,5 s
-#define CORRECT_EVERY  8                   // al massimo 1 frame tolto/ripetuto al ms
+// Al massimo 1 frame tolto/ripetuto ogni 64 pacchetti (8 ms): variazione di
+// velocita' dello 0,26%, non percepibile come cambio di intonazione.
+#define CORRECT_EVERY  64
+// Oltre questa soglia (es. arretrato consegnato dalla cattura all'avvio) si
+// scarta subito l'eccesso: correggerlo lentamente alzerebbe il pitch per secondi.
+#define JUMP_FILL      4096                // ~85 ms
 
 // Pacchetti tenuti in coda nel FIFO USB oltre a quello in trasmissione.
 #define USB_AHEAD      48                  // ~6 ms
@@ -56,7 +61,9 @@ static size_t g_head, g_fill;      // g_head = prossimo frame da leggere
 static struct {
   long packets, silent, drops, dups, underruns, solo_reconnects, cap_restarts;
   long usb_late;                   // il loop e' arrivato tardi: FIFO USB vuoto
+  long jumps, jumped;              // salti immediati e frame scartati con essi
   int fifo_depth;                  // pacchetti accettati dal FIFO USB a vuoto
+  uint32_t solo_rate;              // sample rate riletto dalla Solo
   double usb_queued;               // stima pacchetti in coda
 } st;
 
@@ -176,6 +183,17 @@ static size_t build_packet(uint8_t *pkt, const solo_t *s, int *playing) {
     return silent_packet(pkt, s);
   }
 
+  if (g_fill > JUMP_FILL) {
+    size_t skip = g_fill - PREBUFFER;
+    g_head = (g_head + skip) % RING_FRAMES;
+    g_fill -= skip;
+    st.jumps++;
+    st.jumped += skip;
+    drift.win_min = (size_t)-1;
+    drift.win_count = 0;
+    drift.pending_drop = drift.pending_dup = 0;
+  }
+
   drift_update();
   int dup = 0;
   if (st.packets % CORRECT_EVERY == 0) {
@@ -249,11 +267,13 @@ static void status_text(char *out, size_t size, int solo_ok, int cap_ok) {
            "solo: %s | cattura: %s\n"
            "latenza nostra: %.1f ms (ring %.1f + USB %.1f), min ring ultima finestra %zu frame\n"
            "pacchetti %ld, silenzio %ld, underrun %ld, drop %ld, dup %ld, USB in ritardo %ld\n"
+           "salti %ld (%ld frame), sample rate Solo %u Hz\n"
            "FIFO USB %d pacchetti, riconnessioni solo %ld, riavvii cattura %ld, overrun cattura %ld\n",
            solo_ok ? "collegata" : "assente", cap_ok ? "attiva" : "in attesa",
            ring_ms + usb_ms, ring_ms, usb_ms,
            drift.win_min == (size_t)-1 ? 0 : drift.win_min,
            st.packets, st.silent, st.underruns, st.drops, st.dups, st.usb_late,
+           st.jumps, st.jumped, st.solo_rate,
            st.fifo_depth, st.solo_reconnects, st.cap_restarts, capture_overruns());
 }
 
@@ -315,6 +335,7 @@ int main(void) {
         playing = 0;
         pkt_len = 0;
         st.solo_reconnects++;
+        st.solo_rate = solo.rate;
         // Misura la profondita' del FIFO USB riempiendolo di silenzio.
         size_t len = silent_packet(pkt, &solo);
         int depth = 0;

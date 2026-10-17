@@ -94,17 +94,22 @@ static int set_alt(solo_t *s, int alt) {
   return ioctl(s->ctl_fd, USB_SET_ALTINTERFACE, &ai);
 }
 
-static int set_rate(solo_t *s, uint32_t rate) {
-  uint8_t data[4] = { rate, rate >> 8, rate >> 16, rate >> 24 };
+// Richiesta UAC2 CUR sul controllo frequenza del clock (scrittura o lettura).
+static int clock_rate(solo_t *s, int write, uint32_t *rate) {
+  uint8_t data[4] = { *rate, *rate >> 8, *rate >> 16, *rate >> 24 };
   struct usb_ctl_request req;
   memset(&req, 0, sizeof(req));
   req.ucr_data = data;
-  req.ucr_request.bmRequestType = UT_WRITE | UT_CLASS | UT_INTERFACE;
+  req.ucr_request.bmRequestType = (write ? UT_WRITE : UT_READ) | UT_CLASS | UT_INTERFACE;
   req.ucr_request.bRequest = 0x01;                          // CUR
   USETW(req.ucr_request.wValue, 0x01 << 8);                 // CS_SAM_FREQ_CONTROL
   USETW(req.ucr_request.wIndex, (s->clock_id << 8) | s->ac_iface);
   USETW(req.ucr_request.wLength, 4);
-  return ioctl(s->ctl_fd, USB_DO_REQUEST, &req);
+  if (ioctl(s->ctl_fd, USB_DO_REQUEST, &req) != 0)
+    return -1;
+  if (!write)
+    *rate = data[0] | (data[1] << 8) | (data[2] << 16) | ((uint32_t)data[3] << 24);
+  return 0;
 }
 
 int solo_open(solo_t *s, int verbose) {
@@ -121,8 +126,11 @@ int solo_open(solo_t *s, int verbose) {
   if (set_alt(s, s->as_alt) != 0)
     goto fail;
   what = "sample rate";
-  if (set_rate(s, SOLO_RATE) != 0)
+  uint32_t rate = SOLO_RATE;
+  if (clock_rate(s, 1, &rate) != 0)
     goto fail;
+  s->rate = 0;
+  clock_rate(s, 0, &s->rate);
 
   char path[32];
   snprintf(path, sizeof(path), "/dev/usb/%d.%d.%d", s->bus, s->addr, s->ep & 0x0f);
@@ -132,8 +140,8 @@ int solo_open(solo_t *s, int verbose) {
     goto fail;
 
   if (verbose)
-    printf("solo: ugen%d.%d, %d canali, %d bit in %d byte, ep 0x%02x\n",
-           s->bus, s->addr, s->channels, s->bits, s->subslot, s->ep);
+    printf("solo: ugen%d.%d, %d canali, %d bit in %d byte, ep 0x%02x, %u Hz\n",
+           s->bus, s->addr, s->channels, s->bits, s->subslot, s->ep, s->rate);
   return 0;
 
 fail:
