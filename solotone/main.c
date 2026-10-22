@@ -22,7 +22,16 @@
 #include <dev/usb/usb_ioctl.h>
 
 #define SOLO_VID 0x1235
-#define SOLO_PID 0x8211
+
+// PID Focusrite accettati: Solo 3a gen (testata) e 2i2 3a gen.
+static const uint16_t solo_pids[] = { 0x8211, 0x8210 };
+
+static int solo_pid_ok(uint16_t pid) {
+  for (size_t i = 0; i < sizeof(solo_pids) / sizeof(solo_pids[0]); i++)
+    if (solo_pids[i] == pid)
+      return 1;
+  return 0;
+}
 
 #define RATE        48000
 #define TONE_HZ     440.0
@@ -84,7 +93,7 @@ static int find_solo(solo_t *s) {
         continue;
       struct usb_device_descriptor dd;
       if (ioctl(fd, USB_GET_DEVICE_DESC, &dd) == 0 &&
-          UGETW(dd.idVendor) == SOLO_VID && UGETW(dd.idProduct) == SOLO_PID) {
+          UGETW(dd.idVendor) == SOLO_VID && solo_pid_ok(UGETW(dd.idProduct))) {
         s->bus = bus;
         s->addr = addr;
         log_msg("Solo trovata su %s\n", path);
